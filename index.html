@@ -157,6 +157,19 @@ input.search:focus,select.fld:focus{outline:none;border-color:var(--teal);box-sh
 .promptbox.show{display:block}
 .rw-actions{display:flex;gap:9px;align-items:center;margin-top:9px;flex-wrap:wrap}
 
+/* AI generation widget */
+.ai-box{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line-2)}
+.ai-box .lab2{font-size:13px;font-weight:800;color:var(--ink);margin-bottom:7px}
+#apiKey{width:100%;padding:10px 14px;border:1px solid var(--line-2);border-radius:9999px;font:inherit;font-size:13px;color:var(--ink);background:var(--surface)}
+#apiKey:focus{outline:none;border-color:var(--teal);box-shadow:0 0 0 3px var(--teal-soft)}
+.ai-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin-top:9px}
+.ai-row select{padding:9px 12px;border:1px solid var(--line-2);border-radius:9999px;font:inherit;font-size:13px;font-weight:600;background:var(--surface);color:var(--ink);cursor:pointer;margin-left:6px}
+.ai-note{font-size:11.5px;color:var(--ink-soft);margin-top:8px;line-height:1.5}
+.ai-note b{color:var(--ink)}
+.genstatus{font-size:12px;font-weight:700;color:var(--teal);margin-top:9px;min-height:16px;font-variant-numeric:tabular-nums}
+.genbox{width:100%;min-height:220px;max-height:460px;resize:vertical;margin-top:8px;padding:12px;border:1px solid var(--line-2);border-radius:10px;background:var(--bg-3);color:var(--ink);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;line-height:1.5;display:none}
+.genbox.show{display:block}
+
 /* drag-over state */
 body.dragging::after{content:'Drop your Power BI / GSC CSV to refresh the numbers';position:fixed;inset:0;background:rgba(219,48,106,.06);border:3px dashed var(--pink);z-index:80;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:800;color:var(--pink);pointer-events:none}
 
@@ -207,6 +220,21 @@ footer{margin-top:28px;text-align:center;font-size:11.5px;color:var(--ink-soft)}
     <div class="tpl-row">
       <button class="btn sm" id="tplReset">Reset to master prompt</button>
       <span class="saved" id="tplSaved"></span>
+    </div>
+    <div class="ai-box">
+      <div class="lab2">✨ AI generation — writes the full blog in this page</div>
+      <input id="apiKey" type="password" placeholder="Paste your Anthropic API key (sk-ant-...)" autocomplete="off" spellcheck="false">
+      <div class="ai-row">
+        <label style="font-size:12px;font-weight:700;color:var(--ink-soft)">Model<select id="aiModel">
+          <option value="claude-opus-4-8">Opus 4.8 — best quality</option>
+          <option value="claude-sonnet-4-6">Sonnet 4.6 — cheaper, fast</option>
+          <option value="claude-haiku-4-5">Haiku 4.5 — cheapest</option>
+        </select></label>
+        <label style="font-size:12px;font-weight:700;color:var(--ink-soft);display:flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" id="aiSearch" checked style="accent-color:var(--teal)"> Web research + fact-check
+        </label>
+      </div>
+      <div class="ai-note"><b>Your key is stored only in this browser</b>, never in the file. Each blog calls the Anthropic API and <b>costs money</b> (your own usage, billed by Anthropic — separate from any Claude subscription). Don't use on a shared computer. Get a key at <b>console.anthropic.com</b>.</div>
     </div>
   </details>
 
@@ -391,6 +419,26 @@ function ctaSuggest(r){const text=((r.id||"")+" "+(r.cluster||"")).toLowerCase()
   return "(intent unclear — lead to the general hub, confirm before deep-linking)";
 }
 
+/* the per-article "THIS ARTICLE" brief — used by the prompt builder AND the AI generator */
+function articleBrief(id){const r=SEED.find(x=>x.id===id);const p=rec(id);const m=metrics[id]||{};
+  const cta=p.cta||ctaSuggest(r);
+  const deltaTxt=(m.clicks!=null)?((m.clicks-r.clicks>=0?"+":"")+(r.clicks?Math.round((m.clicks-r.clicks)/r.clicks*100):0)+"% vs baseline"):"";
+  const L=[];const add=(k,v)=>{if(v!==""&&v!=null)L.push(k+": "+v);};
+  add("Source post to rewrite",r.url);
+  add("Working slug (keep this URL)",r.id);
+  add("State / fact base to apply",r.state+"  (use the VERIFIED FACT BASE for this state)");
+  add("Content cluster",r.cluster);
+  add("Audit recommendation",r.rec);
+  if(r.rec==="Redirect")add("Redirect target",p.target||r.target||"(set one)");
+  add("Suggested CTA product (per product-match logic)",cta+"  — confirm intent, swap if weak fit");
+  add("Target keyword / search intent",p.keyword);
+  add("Proposed meta title",p.title);
+  add("Proposed meta description",p.meta);
+  add("Facts to preserve / working notes",(p.notes||"").replace(/\s+/g," "));
+  add("Live performance",(m.clicks!=null?m.clicks+" clicks":r.clicks+" clicks (baseline)")+(m.impressions!=null?", "+m.impressions+" impr":"")+(m.position!=null?", pos "+m.position:"")+(deltaTxt?", "+deltaTxt:""));
+  return "▶ THIS ARTICLE — rewrite brief\n"+L.join("\n");
+}
+
 /* fill {{placeholders}} in the template, and append a THIS ARTICLE brief when none reference {{url}} */
 function buildPrompt(id){const r=SEED.find(x=>x.id===id);const p=rec(id);const m=metrics[id]||{};
   const cta=p.cta||ctaSuggest(r);
@@ -404,22 +452,54 @@ function buildPrompt(id){const r=SEED.find(x=>x.id===id);const p=rec(id);const m
   const usedPlaceholder=/\{\{\s*url\s*\}\}/.test(out);
   out=out.replace(/\{\{\s*([a-z_]+)\s*\}\}/gi,(mm,k)=>vals[k.toLowerCase()]!=null?String(vals[k.toLowerCase()]):mm);
   if(!usedPlaceholder){
-    const L=[];const add=(k,v)=>{if(v!==""&&v!=null)L.push(k+": "+v);};
-    add("Source post to rewrite",r.url);
-    add("Working slug",r.id);
-    add("State / fact base to apply",r.state+"  (use the VERIFIED FACT BASE for this state)");
-    add("Content cluster",r.cluster);
-    add("Audit recommendation",r.rec);
-    if(r.rec==="Redirect")add("Redirect target",vals.redirect_target||"(set one)");
-    add("Suggested CTA product (per product-match logic)",cta+"  — confirm intent, swap if weak fit");
-    add("Target keyword / search intent",p.keyword);
-    add("Proposed meta title",p.title);
-    add("Proposed meta description",p.meta);
-    add("Facts to preserve / working notes",(p.notes||"").replace(/\s+/g," "));
-    add("Live performance",(m.clicks!=null?m.clicks+" clicks":r.clicks+" clicks (baseline)")+(m.impressions!=null?", "+m.impressions+" impr":"")+(m.position!=null?", pos "+m.position:"")+(deltaTxt?", "+deltaTxt:""));
-    out+="\n\n========================================\n▶ THIS ARTICLE — rewrite brief\n========================================\n"+L.join("\n")+"\n\nProduce the full HTML rewrite per all standards above. Then give 5+ CTAs in chat.\n========================================";
+    out+="\n\n========================================\n"+articleBrief(id)+"\n\nProduce the full HTML rewrite per all standards above. Then give 5+ CTAs in chat.\n========================================";
   }
   return out;
+}
+
+/* ─── LIVE AI GENERATION (calls the Anthropic API from your browser with YOUR key) ───── */
+function webSearchTool(model){return /haiku/.test(model)?{type:"web_search_20250305",name:"web_search"}:{type:"web_search_20260209",name:"web_search"};}
+
+async function callClaude(opts){
+  let messages=[{role:"user",content:opts.user}];let text="";
+  for(let i=0;i<6;i++){
+    if(opts.onStatus)opts.onStatus(i===0?"Contacting Claude":"Researching and writing (step "+(i+1)+")");
+    const body={model:opts.model,max_tokens:16000,system:opts.system,messages:messages,thinking:{type:"adaptive"}};
+    if(opts.tools)body.tools=opts.tools;
+    const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",
+      headers:{"x-api-key":opts.key,"anthropic-version":"2023-06-01","content-type":"application/json","anthropic-dangerous-direct-browser-access":"true"},
+      body:JSON.stringify(body)});
+    if(!res.ok){let msg="HTTP "+res.status;try{const e=await res.json();if(e&&e.error&&e.error.message)msg=e.error.message;}catch(_){}throw new Error(msg);}
+    const data=await res.json();
+    for(const b of (data.content||[])){if(b.type==="text")text+=b.text;}
+    if(data.stop_reason==="pause_turn"){messages.push({role:"assistant",content:data.content});continue;}
+    break;
+  }
+  return text;
+}
+
+async function generateBlog(row,id){
+  let key="";try{key=(localStorage.getItem("ids_anth_key")||"").trim();}catch(e){}
+  if(!key){toast("Add your Anthropic API key in the ⚡ panel at the top");const a=document.getElementById("apiKey");if(a)a.focus();return;}
+  const model=(document.getElementById("aiModel")||{}).value||"claude-opus-4-8";
+  const useSearch=!document.getElementById("aiSearch")||document.getElementById("aiSearch").checked;
+  const status=row.querySelector(".genstatus"),box=row.querySelector(".genbox"),btn=row.querySelector(".genBlog");
+  btn.disabled=true;const t0=Date.now();
+  const tick=()=>{status.textContent=(status.dataset.msg||"Working")+" · "+Math.round((Date.now()-t0)/1000)+"s";};
+  status.dataset.msg="Starting";tick();const timer=setInterval(tick,1000);
+  const sys=loadPrompt()+"\n\n---\nWEB TOOL OUTPUT MODE\n- Before writing, use web search to confirm current SEO best practices and to verify facts and idrivesafely.com internal links.\n- Output ONLY the finished blog as raw HTML, starting with the meta title and description in an HTML comment block, then <h1>. No markdown code fences, no preamble, no sign-off.\n- After the HTML, output a line containing exactly: === CTAS ===\n- Then list 5 or more CTA options.";
+  const user=articleBrief(id)+"\n\nWrite the complete HTML blog for this article now.";
+  try{
+    const out=await callClaude({key:key,model:model,system:sys,user:user,
+      tools:useSearch?[webSearchTool(model)]:null,
+      onStatus:m=>{status.dataset.msg=m;tick();}});
+    const html=out.trim().replace(/^```html\s*/i,"").replace(/^```\s*/,"").replace(/```\s*$/,"").trim();
+    box.value=html;box.classList.add("show");
+    row.querySelector(".copyBlog").style.display="";row.querySelector(".dlBlog").style.display="";
+    status.textContent="Done in "+Math.round((Date.now()-t0)/1000)+"s — review before publishing";
+    toast("Blog written");
+  }catch(err){status.textContent="Error: "+err.message;toast("Generation failed");}
+  finally{clearInterval(timer);btn.disabled=false;}
 }
 
 /* merged view of a page's numbers: live import wins, SEED baseline is the fallback */
@@ -578,6 +658,13 @@ function buildDetail(row,id){
         <button class="btn sm copyPrompt" style="display:none">Copy prompt</button>
       </div>
       <textarea class="promptbox" readonly spellcheck="false" placeholder="Your filled-in rewrite prompt appears here…"></textarea>
+      <div class="rw-actions" style="margin-top:12px">
+        <button class="btn primary sm genBlog">✨ Write full blog (AI)</button>
+        <button class="btn sm copyBlog" style="display:none">Copy HTML</button>
+        <button class="btn sm dlBlog" style="display:none">Download .html</button>
+      </div>
+      <div class="genstatus"></div>
+      <textarea class="genbox" spellcheck="false" placeholder="The AI-written HTML blog will appear here — review before publishing."></textarea>
     </div>`;
 }
 
@@ -600,6 +687,15 @@ list.addEventListener("click",e=>{
     if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(box.value).then(done,()=>{box.select();document.execCommand("copy");done();});}
     else{box.select();document.execCommand("copy");done();}
     return;}
+  const gen=e.target.closest(".genBlog");
+  if(gen){const row=gen.closest(".row");generateBlog(row,row.dataset.id);return;}
+  const cbl=e.target.closest(".copyBlog");
+  if(cbl){const box=cbl.closest(".row").querySelector(".genbox");
+    if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(box.value).then(()=>toast("HTML copied"),()=>{box.select();document.execCommand("copy");toast("HTML copied");});
+    else{box.select();document.execCommand("copy");toast("HTML copied");}
+    return;}
+  const dbl=e.target.closest(".dlBlog");
+  if(dbl){const row=dbl.closest(".row");download("ids-"+row.dataset.id+".html",row.querySelector(".genbox").value,"text/html");toast("Downloaded");return;}
 });
 list.addEventListener("change",e=>{
   const row=e.target.closest(".row");if(!row)return;const id=row.dataset.id;
@@ -712,6 +808,16 @@ const tplEl=document.getElementById("promptTpl"),tplSaved=document.getElementByI
 tplEl.value=loadPrompt();
 let tplT;tplEl.addEventListener("input",()=>{savePrompt(tplEl.value);clearTimeout(tplT);tplSaved.textContent="Saved ✓";tplT=setTimeout(()=>tplSaved.textContent="",1400);});
 document.getElementById("tplReset").addEventListener("click",()=>{tplEl.value=seedPrompt();savePrompt(tplEl.value);tplSaved.textContent="Reset to master prompt ✓";setTimeout(()=>tplSaved.textContent="",1600);});
+
+/* AI generation settings persistence (key/model/search) */
+try{
+  const apiKeyEl=document.getElementById("apiKey");
+  if(apiKeyEl){apiKeyEl.value=localStorage.getItem("ids_anth_key")||"";apiKeyEl.addEventListener("input",()=>{try{localStorage.setItem("ids_anth_key",apiKeyEl.value.trim());}catch(e){}});}
+  const aiModelEl=document.getElementById("aiModel");
+  if(aiModelEl){aiModelEl.value=localStorage.getItem("ids_ai_model")||"claude-opus-4-8";aiModelEl.addEventListener("change",()=>{try{localStorage.setItem("ids_ai_model",aiModelEl.value);}catch(e){}});}
+  const aiSearchEl=document.getElementById("aiSearch");
+  if(aiSearchEl){const sv=localStorage.getItem("ids_ai_search");if(sv!==null)aiSearchEl.checked=sv==="1";aiSearchEl.addEventListener("change",()=>{try{localStorage.setItem("ids_ai_search",aiSearchEl.checked?"1":"0");}catch(e){}});}
+}catch(e){}
 
 /* boot */
 load();buildStateFilter();render();
